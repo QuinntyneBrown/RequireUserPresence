@@ -23,26 +23,18 @@ namespace AreYouConnected.Api
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var connection = new HubConnectionBuilder()                
+            var connection = new HubConnectionBuilder()
                 .WithUrl("https://localhost:44337/hubs/connectionManagement", options => {
                     options.AccessTokenProvider = () => Task.FromResult(_securityTokenFactory.Create("System"));
                 })
                 .Build();
 
-            await connection.StartAsync(stoppingToken);
-            
+            connection.On<Dictionary<string,string>>("ConnectionsChanged", (connections)
+                => _hubService.Connections = new ConcurrentDictionary<string, string>(connections));
+
             _hubService.HubConnection = connection;
 
-            var channel = await connection
-                .StreamAsChannelAsync<Dictionary<string,string>>("GetConnections", stoppingToken);
-
-            while (await channel.WaitToReadAsync(stoppingToken))
-            {
-                while (channel.TryRead(out var connections))
-                {
-                    _hubService.Connections = new ConcurrentDictionary<string, string>(connections);
-                }
-            }
+            await connection.StartAsync();
         }
     }
 }

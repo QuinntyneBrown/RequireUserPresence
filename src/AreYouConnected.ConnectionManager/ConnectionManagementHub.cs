@@ -3,12 +3,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Microsoft.ServiceFabric.Data;
+using Microsoft.ServiceFabric.Data.Collections;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reactive.Subjects;
-using System.Threading.Channels;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AreYouConnected.ConnectionManager
@@ -18,54 +17,75 @@ namespace AreYouConnected.ConnectionManager
         Task ShowUsersOnLine(int count);
         Task Result(string result);
         Task ConnectionId(string connectionId);
+        Task ConnectionsChanged(IDictionary<string,string> connections);
     }
 
     [Authorize(AuthenticationSchemes = "Bearer")]
     public class ConnectionManagementHub: Hub<IConnectionManagementHub> {
         
-        public static ConcurrentDictionary<string, string> Connections  
-            = new ConcurrentDictionary<string, string>();
-        
+        private readonly IReliableStateManager _reliableStateManager;
+
         private readonly ILogger<ConnectionManagementHub> _logger;
         
-        public static BehaviorSubject<Dictionary<string,string>> ConnectionsChanged 
-            = new BehaviorSubject<Dictionary<string, string>>(Connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
-        
-        public ConnectionManagementHub(ILogger<ConnectionManagementHub> logger)
-            => _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        public ConnectionManagementHub(ILogger<ConnectionManagementHub> logger, IReliableStateManager reliableStateManager)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _reliableStateManager = reliableStateManager ?? throw new ArgumentNullException(nameof(reliableStateManager));
+        }
+            
 
         public override async Task OnConnectedAsync()
         {            
             if (!Context.User.IsInRole("System"))
-            {                
-                if (!Connections.TryAdd(Context.UserIdentifier, Context.ConnectionId))
-                {
-                    Context.Abort();
-                    return;
-                } 
-                
-                await Groups.AddToGroupAsync(Context.ConnectionId, TenantId);
+            {
+                var connections = await this._reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
 
-                await Clients.Group(TenantId).ShowUsersOnLine(Connections.Where(x => x.Key.StartsWith(TenantId)).Count());
+                using (ITransaction tx = this._reliableStateManager.CreateTransaction()) {
+                    var success = await connections.TryAddAsync(tx, Context.UserIdentifier, Context.ConnectionId);
+                    await tx.CommitAsync();
 
-                await Clients.Caller.ConnectionId(Context.ConnectionId);
+                    if(!success)
+                    {
+                        Context.Abort();
+                        return;
+                    }
 
-                ConnectionsChanged.OnNext(Connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));                
+                    await Groups.AddToGroupAsync(Context.ConnectionId, TenantId);
+
+                    await Clients.Group(TenantId).ShowUsersOnLine((await GetConnectionsDictionary()).Where(x => x.Key.StartsWith(TenantId)).Count());
+
+                    await Clients.Caller.ConnectionId(Context.ConnectionId);
+
+                    await Clients.Group("System").ConnectionsChanged(await GetConnectionsDictionary());
+                }
             }
-
+            else
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, "System");
+            }
             await base.OnConnectedAsync();
         }
-
-        [Authorize(Roles = "System")]
-        public ChannelReader<Dictionary<string, string>> GetConnections()
+        
+        public async Task<Dictionary<string,string>> GetConnectionsDictionary()
         {
-            var channel = Channel.CreateUnbounded<Dictionary<string,string>>();
+            var connections = await this._reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
 
-            var disposable = ConnectionsChanged.Subscribe(x => channel.Writer.WriteAsync(x));
+            using (ITransaction tx = this._reliableStateManager.CreateTransaction())
+            {
+                Microsoft.ServiceFabric.Data.IAsyncEnumerable<KeyValuePair<string, string>> list = await connections.CreateEnumerableAsync(tx);
 
-            channel.Reader.Completion.ContinueWith(_ => disposable.Dispose());
+                Microsoft.ServiceFabric.Data.IAsyncEnumerator<KeyValuePair<string, string>> enumerator = list.GetAsyncEnumerator();
 
-            return channel.Reader;            
+                var result = new Dictionary<string, string>();
+
+                while (await enumerator.MoveNextAsync(default(CancellationToken)))
+                {
+                    result.TryAdd(enumerator.Current.Key, enumerator.Current.Value);
+                }
+
+                return result;
+            }
+            
         }
 
         [Authorize(Roles = "System")]
@@ -76,29 +96,41 @@ namespace AreYouConnected.ConnectionManager
         {
             await base.OnDisconnectedAsync(exception);
 
-            if (!Context.User.IsInRole("System") && TryToRemoveConnectedUser(Context.UserIdentifier, Context.ConnectionId))
-            {                                
-                await Clients.All.ShowUsersOnLine(Connections.Count);
+            if (!Context.User.IsInRole("System") && (await TryToRemoveConnectedUser(Context.UserIdentifier, Context.ConnectionId)))
+            {
+                var connections = await GetConnectionsDictionary();
+
+                await Clients.All.ShowUsersOnLine(connections.Count());
                 
                 await Groups.RemoveFromGroupAsync(Context.ConnectionId, TenantId);
 
-                await Clients.Group(TenantId).ShowUsersOnLine(Connections.Where(x => x.Key.StartsWith(TenantId)).Count());
+                await Clients.Group(TenantId).ShowUsersOnLine(connections.Where(x => x.Key.StartsWith(TenantId)).Count());
 
-                ConnectionsChanged.OnNext(Connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
+                await Clients.Group("System").ConnectionsChanged(connections);
             }            
+
+            if(Context.User.IsInRole("System"))
+                await Groups.RemoveFromGroupAsync(Context.ConnectionId, "System");
         } 
         
-        public bool TryToRemoveConnectedUser(string uniqueIdentifier, string connectionId)
+        public async Task<bool> TryToRemoveConnectedUser(string uniqueIdentifier, string connectionId)
         {
-            var connectedUserEntry = Connections.FirstOrDefault(x => x.Key == uniqueIdentifier);
+            var result = false;
+            var connections = await this._reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
 
-            if (connectedUserEntry.Value == connectionId)
+            using (ITransaction tx = this._reliableStateManager.CreateTransaction())
             {
-                Connections.TryRemove(Context.UserIdentifier, out _);
-                return true;
+                var connectionEntryId = await connections.TryGetValueAsync(tx, uniqueIdentifier);
+
+                if (!string.IsNullOrEmpty(connectionEntryId.Value) && connectionEntryId.Value == connectionId)
+                {
+                    await connections.TryRemoveAsync(tx, uniqueIdentifier);
+                    await tx.CommitAsync();
+                    result = true;
+                }
             }
 
-            return false;
+            return result;
         }
 
         public string TenantId { get => Context.User?.FindFirst("TenantId")?.Value; }
