@@ -25,7 +25,7 @@ namespace AreYouConnected.Api
         {
             var connection = new HubConnectionBuilder()
                 .WithUrl("https://localhost:44337/hubs/connectionManagement", options => {
-                    options.AccessTokenProvider = () => Task.FromResult(_securityTokenFactory.Create("System"));
+                    options.AccessTokenProvider = () => Task.FromResult(_securityTokenFactory.Create(Strings.System));
                 })
                 .Build();
 

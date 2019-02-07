@@ -35,8 +35,8 @@ namespace AreYouConnected.Api
                     new ProblemDetails
                     {
                         Title = "Unauthorized",
-                        Type = "",
-                        Detail = "",
+                        Type = "https://api.areyouconnected.com/errors/unauthorized",
+                        Detail = "Unauthorized",
                         Status = StatusCodes.Status401Unauthorized
                     }));
             } 
