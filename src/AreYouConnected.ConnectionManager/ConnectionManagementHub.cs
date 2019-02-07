@@ -51,11 +51,11 @@ namespace AreYouConnected.ConnectionManager
 
                     await Groups.AddToGroupAsync(Context.ConnectionId, TenantId);
 
-                    await Clients.Group(TenantId).ShowUsersOnLine((await GetConnectionsDictionary()).Where(x => x.Key.StartsWith(TenantId)).Count());
+                    await Clients.Group(TenantId).ShowUsersOnLine((await GetConnectionsDictionary(connections)).Where(x => x.Key.StartsWith(TenantId)).Count());
 
                     await Clients.Caller.ConnectionId(Context.ConnectionId);
 
-                    await Clients.Group(Strings.System).ConnectionsChanged(await GetConnectionsDictionary());
+                    await Clients.Group(Strings.System).ConnectionsChanged(await GetConnectionsDictionary(connections));
                 }
             }
             else
@@ -65,9 +65,9 @@ namespace AreYouConnected.ConnectionManager
             await base.OnConnectedAsync();
         }
         
-        public async Task<Dictionary<string,string>> GetConnectionsDictionary()
+        public async Task<Dictionary<string,string>> GetConnectionsDictionary(IReliableDictionary<string, string> connections = null)
         {
-            var connections = await _reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
+            connections = connections ?? await _reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
 
             using (ITransaction tx = _reliableStateManager.CreateTransaction())
             {
@@ -83,7 +83,7 @@ namespace AreYouConnected.ConnectionManager
                 }
 
                 return result;
-            }            
+            }
         }
 
         [Authorize(Roles = "System")]
@@ -94,9 +94,11 @@ namespace AreYouConnected.ConnectionManager
         {
             await base.OnDisconnectedAsync(exception);
 
-            if (!Context.User.IsInRole(Strings.System) && (await TryToRemoveConnectedUser(Context.UserIdentifier, Context.ConnectionId)))
+            var reliableDictionary = await _reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
+
+            if (!Context.User.IsInRole(Strings.System) && (await TryToRemoveConnectedUser(Context.UserIdentifier, Context.ConnectionId,reliableDictionary)))
             {
-                var connections = await GetConnectionsDictionary();
+                var connections = await GetConnectionsDictionary(reliableDictionary);
 
                 await Clients.All.ShowUsersOnLine(connections.Count());
                 
@@ -111,10 +113,10 @@ namespace AreYouConnected.ConnectionManager
                 await Groups.RemoveFromGroupAsync(Context.ConnectionId, Strings.System);
         } 
         
-        public async Task<bool> TryToRemoveConnectedUser(string uniqueIdentifier, string connectionId)
+        public async Task<bool> TryToRemoveConnectedUser(string uniqueIdentifier, string connectionId, IReliableDictionary<string,string> connections)
         {
             var result = false;
-            var connections = await _reliableStateManager.GetOrAddAsync<IReliableDictionary<string, string>>("Connections");
+            
 
             using (var tx = _reliableStateManager.CreateTransaction())
             {
