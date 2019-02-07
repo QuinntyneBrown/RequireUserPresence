@@ -12,7 +12,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace AreYouConnected.Api.Features.Users
 {
-    [Authorize]
+    [Authorize(Policy = "ActiveConnection")]
     [ApiController]
     [Route("api/ping")]
     public class PingController

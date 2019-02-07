@@ -11,6 +11,7 @@ using Swashbuckle.AspNetCore.SwaggerGen;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using Microsoft.AspNetCore.Authorization;
 
 namespace AreYouConnected.Api
 {
@@ -27,7 +28,16 @@ namespace AreYouConnected.Api
             services.AddSingleton<IHubService, HubService>();
 
             services.AddHostedService<Worker>();
+
+            services.AddAuthorization(options =>
+            {
+                options.AddPolicy("ActiveConnection", policy =>
+                    policy.Requirements.Add(new ActiveConnectionRequirement()));
+            });
+
+            services.AddSingleton<IAuthorizationHandler, ActiveConnectionHandler>();
             
+
             services.AddCors(options => options.AddPolicy("CorsPolicy",
                 builder => builder
                 .WithOrigins("http://localhost:4200")
@@ -76,9 +86,7 @@ namespace AreYouConnected.Api
             app.UseCors("CorsPolicy");
 
             app.UseAuthentication();
-
-            app.UseMiddleware<ConnectionGuardMiddleware>();
-
+            
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
