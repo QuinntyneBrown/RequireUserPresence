@@ -1,10 +1,9 @@
-﻿using System.Threading.Tasks;
-using AreYouConnected.Core;
+﻿using AreYouConnected.Core;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
+using System.Threading.Tasks;
 
 namespace AreYouConnected.Api
 {
@@ -31,8 +30,9 @@ namespace AreYouConnected.Api
         protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, ActiveConnectionRequirement requirement)
         {
             var httpContext = _httpContextAccessor.HttpContext;
+            var isSystem = context.User.IsInRole(Strings.System);
 
-            if ((!context.User.IsInRole(Strings.System) && IsConnected(httpContext)) || httpContext.User.IsInRole(Strings.System))
+            if ((!isSystem && IsConnected(httpContext)) || isSystem)
                 context.Succeed(requirement);
 
             await Task.CompletedTask;

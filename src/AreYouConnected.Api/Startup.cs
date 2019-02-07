@@ -12,6 +12,8 @@ using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using Microsoft.AspNetCore.Authorization;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Primitives;
 
 namespace AreYouConnected.Api
 {

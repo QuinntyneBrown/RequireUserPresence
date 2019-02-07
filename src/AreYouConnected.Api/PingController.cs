@@ -38,8 +38,9 @@ namespace AreYouConnected.Api.Features.Users
         [ProducesResponseType(typeof(ProblemDetails), (int)HttpStatusCode.BadRequest)]
         public async Task<IActionResult> Post([FromHeader]string connectionId, CancellationToken cancellationToken)
         {            
-            var uniqueIdentifier = _httpContextAccessor.HttpContext.User.FindFirst("UniqueIdentifier").Value;
-
+            var uniqueIdentifier = _httpContextAccessor.HttpContext.User.FindFirst(Strings.UniqueIdentifier).Value;
+            
+            // After some operation, make sure the user is still connected
             if (!_hubService.IsConnected(uniqueIdentifier, connectionId)) 
                 return new BadRequestObjectResult(new ProblemDetails
                 {
@@ -49,6 +50,7 @@ namespace AreYouConnected.Api.Features.Users
                     Status = (int)HttpStatusCode.BadRequest
                 });
 
+            // send the result via SignalR
             await _hubService.GetHubConnection()
                 .InvokeAsync("SendResult", new SendResultRequest {
                     UserId = uniqueIdentifier,
