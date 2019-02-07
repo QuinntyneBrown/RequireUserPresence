@@ -117,7 +117,6 @@ namespace AreYouConnected.ConnectionManager
         {
             var result = false;
             
-
             using (var tx = _reliableStateManager.CreateTransaction())
             {
                 var connectionEntryId = await connections.TryGetValueAsync(tx, uniqueIdentifier);
